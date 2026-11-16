@@ -1,0 +1,1 @@
+{"description":"A tiny self-hosted uptime monitor, zero dependencies","engines":{"node":">=20"},"license":"MIT","main":"server.js","name":"uptime-mini","scripts":{"start":"node server.js"},"version":"0.1.0"}
