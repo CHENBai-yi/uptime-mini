@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>uptime-mini</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 860px; margin: 0 auto; padding: 24px 16px; color: #1a1a1a; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 20px; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .dot.up { background: #22a06b; }
+  .dot.down { background: #d33; }
+  .dot.pending { background: #bbb; }
+  .name { font-weight: 600; }
+  .url { color: #555; font-size: 13px; word-break: break-all; }
+  .meta { margin-left: auto; text-align: right; font-size: 13px; color: #555; white-space: nowrap; }
+  .bars { display: flex; gap: 2px; margin-top: 10px; }
+  .bar { flex: 1; height: 22px; border-radius: 2px; background: #e5e5e5; }
+  .bar.up { background: #22a06b; }
+  .bar.down { background: #d33; }
+  form.add { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0; }
+  input, button { font: inherit; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; }
+  input[name=name] { width: 160px; }
+  input[name=url] { flex: 1; min-width: 220px; }
+  input[name=intervalSeconds] { width: 90px; }
+  button { background: #1a1a1a; color: #fff; border-color: #1a1a1a; cursor: pointer; }
+  button.ghost { background: #fff; color: #1a1a1a; }
+  button.danger { background: #fff; color: #d33; border-color: #d33; padding: 4px 8px; font-size: 13px; }
+  #login { max-width: 320px; margin: 80px auto; text-align: center; }
+  #login input { width: 100%; box-sizing: border-box; margin-bottom: 10px; }
+  #login button { width: 100%; }
+  .err { color: #d33; font-size: 13px; min-height: 18px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="login" class="hidden">
+  <h1>uptime-mini</h1>
+  <p class="sub">Enter the admin password to continue.</p>
+  <input id="password" type="password" placeholder="Admin password" autocomplete="current-password">
+  <button id="loginBtn">Log in</button>
+  <p class="err" id="loginErr"></p>
+</div>
+
+<div id="app" class="hidden">
+  <h1>uptime-mini</h1>
+  <p class="sub">Simple uptime monitoring. Checks run from this server.</p>
+  <div id="list"></div>
+  <form class="add" id="addForm">
+    <input name="name" placeholder="Name (e.g. Weeny VPS)" required>
+    <input name="url" placeholder="https://example.com/" required>
+    <input name="intervalSeconds" type="number" min="10" max="3600" value="60" title="Check interval in seconds">
+    <button type="submit">Add monitor</button>
+  </form>
+  <button class="ghost" id="logoutBtn">Log out</button>
+</div>
+
+<script>
+const listEl = document.getElementById('list');
+const loginEl = document.getElementById('login');
+const appEl = document.getElementById('app');
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (res.status === 401) { showLogin(); throw new Error('login required'); }
+  return res.json();
+}
+
+function showLogin() {
+  appEl.classList.add('hidden');
+  loginEl.classList.remove('hidden');
+}
+
+function showApp() {
+  loginEl.classList.add('hidden');
+  appEl.classList.remove('hidden');
+}
+
+function fmtTime(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
+}
+
+function render(monitors) {
+  if (monitors.length === 0) {
+    listEl.innerHTML = '<p class="sub">No monitors yet. Add one below.</p>';
+    return;
+  }
+  listEl.innerHTML = monitors.map((m) => {
+    const bars = m.history.map((h) => `<div class="bar ${h.ok ? 'up' : 'down'}" title="${fmtTime(h.t)} — ${h.ok ? 'up' : 'down'} ${h.ms ?? ''}ms"></div>`).join('');
+    const uptime = m.uptime24h === null ? '—' : m.uptime24h + '%';
+    return `<div class="card">
+      <div class="row">
+        <span class="dot ${m.status}"></span>
+        <span class="name">${escapeHtml(m.name)}</span>
+        <span class="url">${escapeHtml(m.url)}</span>
+        <span class="meta">${m.status.toUpperCase()} · ${m.lastLatencyMs ?? '—'} ms<br>24h uptime ${uptime} · every ${m.intervalSeconds}s</span>
+        <button class="danger" data-del="${m.id}">Delete</button>
+      </div>
+      <div class="bars">${bars}</div>
+      <div class="sub" style="margin: 6px 0 0">Last check: ${fmtTime(m.lastCheck)}</div>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('[data-del]').forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm('Delete this monitor?')) return;
+      await api('/api/monitors/' + btn.dataset.del, { method: 'DELETE' });
+      refresh();
+    };
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function refresh() {
+  try {
+    const data = await api('/api/monitors');
+    showApp();
+    render(data.monitors);
+  } catch { /* showLogin already called on 401 */ }
+}
+
+document.getElementById('addForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const res = await fetch('/api/monitors', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: fd.get('name'),
+      url: fd.get('url'),
+      intervalSeconds: Number(fd.get('intervalSeconds')),
+    }),
+  });
+  if (res.ok) { e.target.reset(); e.target.intervalSeconds.value = 60; refresh(); }
+  else { const d = await res.json(); alert(d.error || 'Failed to add monitor'); }
+});
+
+document.getElementById('loginBtn').onclick = async () => {
+  const password = document.getElementById('password').value;
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (res.ok) { document.getElementById('loginErr').textContent = ''; refresh(); }
+  else { document.getElementById('loginErr').textContent = 'Wrong password.'; }
+};
+
+document.getElementById('logoutBtn').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  showLogin();
+};
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
